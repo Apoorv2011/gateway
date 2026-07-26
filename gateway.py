@@ -2,17 +2,20 @@
 # -*- coding: utf-8 -*-
 
 """
-ARC API GATEWAY — WITH SEARCH
-Now you can search by song name and get downloadable URL
+ARC API GATEWAY — WITH py_yt SEARCH
+Same as your bot: search → download → return URL
 """
 
-import aiohttp
-import asyncio
 import os
 import re
+import asyncio
+import aiohttp
 from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 import uvicorn
+
+# 🔥 Same search library as your bot
+from py_yt import VideosSearch
 
 # ==================== CONFIGURATION ====================
 
@@ -21,62 +24,49 @@ ARC_API_BASE = "https://api.arcmusic.fun"
 
 # ==================== APP ====================
 
-app = FastAPI(title="Arc Gateway with Search")
+app = FastAPI(title="Arc Gateway")
 
-# ==================== SEARCH FUNCTION ====================
+# ==================== SEARCH FUNCTION (SAME AS YOUR BOT) ====================
 
 async def search_youtube(query: str):
-    """Search YouTube for a song and get video ID — NO API KEY NEEDED"""
-    
-    # Use Invidious — public, free, no API key
-    search_url = f"https://invidious.io.lol/api/v1/search?q={query.replace(' ', '+')}&type=video&page=1"
-    
+    """Same search logic as your bot — uses py_yt"""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(search_url, timeout=10) as r:
-                if r.status != 200:
-                    return None
-                
-                data = await r.json()
-                if not data:
-                    return None
-                
-                first = data[0]
-                return {
-                    "video_id": first.get("videoId"),
-                    "title": first.get("title", "Unknown"),
-                    "author": first.get("author", "Unknown"),
-                    "duration": first.get("lengthSeconds", 0)
-                }
-    except Exception:
+        _search = VideosSearch(query, limit=1, with_live=False)
+        results = await _search.next()
+    except Exception as e:
+        print(f"Search error: {e}")
         return None
+    
+    if results and results.get("result"):
+        data = results["result"][0]
+        return {
+            "video_id": data.get("id"),
+            "title": data.get("title", "Unknown"),
+            "channel": data.get("channel", {}).get("name", "Unknown"),
+            "duration": data.get("duration", "Unknown")
+        }
+    return None
 
-# ==================== GATEWAY ENDPOINTS ====================
+# ==================== SEARCH + DOWNLOAD ENDPOINT ====================
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "Arc Gateway with Search"}
-
-# 🔥 NEW: Search by song name
 @app.get("/search")
-async def search_song(
-    q: str = Query(..., description="Song name to search (e.g., 'heat waves')"),
+async def search_and_download(
+    q: str = Query(..., description="Song name (e.g., 'heat waves')"),
     isVideo: bool = Query(False, description="True for video, false for audio")
 ):
     """
-    Search for a song by name and get downloadable URL
+    Search for a song by name → returns downloadable URL
     Example: /search?q=heat+waves
-    Returns: downloadable URL directly
     """
     
-    # Step 1: Search for the song
+    # Step 1: Search using py_yt (same as your bot!)
     result = await search_youtube(q)
     if not result:
         raise HTTPException(404, f"Song '{q}' not found")
     
     video_id = result["video_id"]
     title = result["title"]
-    author = result["author"]
+    channel = result["channel"]
     
     # Step 2: Start download via Arc API
     async with aiohttp.ClientSession() as session:
@@ -132,10 +122,9 @@ async def search_song(
                         return {
                             "success": True,
                             "song": title,
-                            "artist": author,
+                            "artist": channel,
                             "video_id": video_id,
-                            "download_url": downloadable_url,
-                            "message": "Click the download_url to get your MP3!"
+                            "download_url": downloadable_url
                         }
                 
                 elif status in ("failed", "error"):
@@ -143,32 +132,22 @@ async def search_song(
     
     raise HTTPException(408, "Download timed out")
 
-# ==================== ORIGINAL ENDPOINTS (Unchanged) ====================
+# ==================== ORIGINAL ENDPOINTS (Same as Arc API) ====================
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Arc Gateway is running"}
 
 @app.get("/download")
 async def download(
-    query: str = Query(..., description="YouTube Video ID or URL"),
+    query: str = Query(..., description="YouTube Video ID"),
     isVideo: bool = Query(False, description="True for video, false for audio")
 ):
-    """Original download endpoint — accepts video ID or URL"""
-    
-    # Extract video ID if full URL is provided
-    video_id = query
-    if "youtube.com" in query or "youtu.be" in query:
-        patterns = [
-            r"v=([A-Za-z0-9_-]{11})",
-            r"youtu\.be/([A-Za-z0-9_-]{11})",
-            r"shorts/([A-Za-z0-9_-]{11})"
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, query)
-            if match:
-                video_id = match.group(1)
-                break
+    """Direct download by video ID — same as Arc API"""
     
     async with aiohttp.ClientSession() as session:
         params = {
-            "query": video_id,
+            "query": query,
             "isVideo": str(isVideo).lower(),
             "api_key": ARC_API_KEY
         }
@@ -220,7 +199,4 @@ async def get_media(file_path: str):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print("🚀 Arc Gateway with Search running")
-    print(f"🔑 API Key: {ARC_API_KEY[:10]}...")
-    print("📡 Endpoints:")
-    print("   /search?q=heat+waves  ← Search by song name!")
     uvicorn.run(app, host="0.0.0.0", port=port)
