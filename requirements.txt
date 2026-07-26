@@ -1,4 +1,4 @@
 fastapi
 uvicorn[standard]
 aiohttp
-py-yt
+git+https://github.com/py-yt/py-yt.git
