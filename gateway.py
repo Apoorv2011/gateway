@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-ARC API GATEWAY — WITH py_yt SEARCH
-Same as your bot: search → download → return URL
-"""
-
 import os
 import re
 import asyncio
@@ -14,7 +9,7 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import StreamingResponse
 import uvicorn
 
-# 🔥 Same search library as your bot
+# 🔥 SAME as your bot — py_yt
 from py_yt import VideosSearch
 
 # ==================== CONFIGURATION ====================
@@ -22,14 +17,12 @@ from py_yt import VideosSearch
 ARC_API_KEY = os.environ.get("ARC_API_KEY", "YOUR_API_KEY_HERE")
 ARC_API_BASE = "https://api.arcmusic.fun"
 
-# ==================== APP ====================
+app = FastAPI(title="Arc Gateway with py_yt Search")
 
-app = FastAPI(title="Arc Gateway")
-
-# ==================== SEARCH FUNCTION (SAME AS YOUR BOT) ====================
+# ==================== SEARCH (EXACTLY LIKE YOUR BOT) ====================
 
 async def search_youtube(query: str):
-    """Same search logic as your bot — uses py_yt"""
+    """EXACT same search logic as your bot"""
     try:
         _search = VideosSearch(query, limit=1, with_live=False)
         results = await _search.next()
@@ -43,23 +36,17 @@ async def search_youtube(query: str):
             "video_id": data.get("id"),
             "title": data.get("title", "Unknown"),
             "channel": data.get("channel", {}).get("name", "Unknown"),
-            "duration": data.get("duration", "Unknown")
         }
     return None
 
-# ==================== SEARCH + DOWNLOAD ENDPOINT ====================
+# ==================== SEARCH + DOWNLOAD ====================
 
 @app.get("/search")
 async def search_and_download(
-    q: str = Query(..., description="Song name (e.g., 'heat waves')"),
-    isVideo: bool = Query(False, description="True for video, false for audio")
+    q: str = Query(..., description="Song name"),
+    isVideo: bool = Query(False)
 ):
-    """
-    Search for a song by name → returns downloadable URL
-    Example: /search?q=heat+waves
-    """
-    
-    # Step 1: Search using py_yt (same as your bot!)
+    # Step 1: Search (same as your bot!)
     result = await search_youtube(q)
     if not result:
         raise HTTPException(404, f"Song '{q}' not found")
@@ -68,7 +55,7 @@ async def search_and_download(
     title = result["title"]
     channel = result["channel"]
     
-    # Step 2: Start download via Arc API
+    # Step 2: Download via Arc API
     async with aiohttp.ClientSession() as session:
         params = {
             "query": video_id,
@@ -82,18 +69,17 @@ async def search_and_download(
             timeout=30
         ) as r:
             if r.status != 200:
-                error = await r.text()
-                raise HTTPException(r.status, error)
+                raise HTTPException(r.status, await r.text())
             
             data = await r.json()
             job_id = data.get("job_id")
             
             if not job_id:
-                raise HTTPException(500, "No job_id returned")
+                raise HTTPException(500, "No job_id")
     
-    # Step 3: Poll for completion
+    # Step 3: Poll
     async with aiohttp.ClientSession() as session:
-        for i in range(30):
+        for _ in range(30):
             await asyncio.sleep(2)
             
             async with session.get(
@@ -109,22 +95,17 @@ async def search_and_download(
                 status = job.get("status") or status_data.get("status")
                 
                 if status == "done":
-                    result_data = job.get("result", {})
-                    public_url = result_data.get("public_url", "")
-                    
+                    public_url = job.get("result", {}).get("public_url", "")
                     if public_url:
-                        # Convert M4A to MP3
                         if ".m4a" in public_url:
                             public_url = public_url.replace(".m4a", ".mp3")
-                        
-                        downloadable_url = f"{ARC_API_BASE}{public_url}"
                         
                         return {
                             "success": True,
                             "song": title,
                             "artist": channel,
                             "video_id": video_id,
-                            "download_url": downloadable_url
+                            "download_url": f"{ARC_API_BASE}{public_url}"
                         }
                 
                 elif status in ("failed", "error"):
@@ -132,61 +113,49 @@ async def search_and_download(
     
     raise HTTPException(408, "Download timed out")
 
-# ==================== ORIGINAL ENDPOINTS (Same as Arc API) ====================
+# ==================== OTHER ENDPOINTS ====================
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Arc Gateway is running"}
+    return {"status": "ok", "message": "Arc Gateway"}
 
 @app.get("/download")
 async def download(
-    query: str = Query(..., description="YouTube Video ID"),
-    isVideo: bool = Query(False, description="True for video, false for audio")
+    query: str = Query(...),
+    isVideo: bool = Query(False)
 ):
-    """Direct download by video ID — same as Arc API"""
-    
     async with aiohttp.ClientSession() as session:
         params = {
             "query": query,
             "isVideo": str(isVideo).lower(),
             "api_key": ARC_API_KEY
         }
-        
         async with session.get(
             f"{ARC_API_BASE}/youtube/v2/download",
             params=params,
             timeout=30
         ) as r:
             if r.status != 200:
-                error = await r.text()
-                raise HTTPException(r.status, error)
+                raise HTTPException(r.status, await r.text())
             return await r.json()
 
 @app.get("/status")
-async def status(
-    job_id: str = Query(..., description="Job ID from download")
-):
+async def status(job_id: str = Query(...)):
     async with aiohttp.ClientSession() as session:
-        params = {
-            "job_id": job_id,
-            "api_key": ARC_API_KEY
-        }
-        
+        params = {"job_id": job_id, "api_key": ARC_API_KEY}
         async with session.get(
             f"{ARC_API_BASE}/youtube/jobStatus",
             params=params,
             timeout=30
         ) as r:
             if r.status != 200:
-                error = await r.text()
-                raise HTTPException(r.status, error)
+                raise HTTPException(r.status, await r.text())
             return await r.json()
 
 @app.get("/media/{file_path:path}")
 async def get_media(file_path: str):
     async with aiohttp.ClientSession() as session:
-        media_url = f"{ARC_API_BASE}/media/{file_path}"
-        async with session.get(media_url) as r:
+        async with session.get(f"{ARC_API_BASE}/media/{file_path}") as r:
             if r.status != 200:
                 raise HTTPException(r.status, "Media not found")
             return StreamingResponse(
@@ -194,9 +163,6 @@ async def get_media(file_path: str):
                 media_type=r.headers.get("content-type", "audio/mpeg")
             )
 
-# ==================== START ====================
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    print("🚀 Arc Gateway with Search running")
     uvicorn.run(app, host="0.0.0.0", port=port)
