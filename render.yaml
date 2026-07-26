@@ -2,7 +2,7 @@ services:
   - type: web
     name: arc-gateway
     runtime: python
-    repo: https://github.com/YOUR_USERNAME/arc-gateway
+    repo: https://github.com/Apoorv2011/gateway
     plan: free
     region: oregon
     buildCommand: pip install -r requirements.txt
