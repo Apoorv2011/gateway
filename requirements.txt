@@ -1,4 +1,4 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-aiohttp==3.9.0
-python-multipart==0.0.6
+fastapi
+uvicorn[standard]
+aiohttp
+py-yt
