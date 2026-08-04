@@ -4,36 +4,35 @@
 import os
 import asyncio
 import aiohttp
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 import uvicorn
 
 # Configuration
-ARC_API_KEY = os.environ.get("ARC_API_KEY")
-if not ARC_API_KEY:
-    print("WARNING: ARC_API_KEY environment variable is missing!")
+ARC_API_KEY = os.environ.get("ARC_API_KEY", "YOUR_API_KEY_HERE")
+ARC_API_BASE = "https://arcmusic.fun"
 
-ARC_API_BASE = "https://api.arcmusic.fun"
-
-app = FastAPI(title="Arc Download Gateway")
+app = FastAPI(title="Arc Path Gateway")
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Arc Download Gateway Active"}
+    return {"status": "ok", "message": "Arc Path Gateway Active"}
 
-@app.get("/get-download")
-async def get_download_url(
-    video_id: str = Query(..., description="The YouTube Video ID only (e.g., gJLVTKhTnog)"),
-    isVideo: bool = Query(False, description="True for video, False for audio")
-):
+# ==================== NEW SLASH SEARCH ENDPOINT ====================
+
+@app.get("/search/{q}")
+async def search_and_download(q: str):
     """
-    Accepts a direct YouTube video ID, initiates background processing on Arc API,
-    polls until complete, and gives back the final absolute downloadable URL.
+    Accepts the YouTube video ID directly in the URL path: /search/VIDEO_ID
+    Automatically processes it as an audio download.
     """
-    # Step 1: Initialize Download Job
+    video_id = q  # The path parameter {q} is your direct YouTube video ID
+    
+    # Step 1: Start Download via Arc API
     async with aiohttp.ClientSession() as session:
         params = {
             "query": video_id,
-            "isVideo": str(isVideo).lower(),
+            "isVideo": "false",
             "api_key": ARC_API_KEY
         }
         
@@ -41,11 +40,10 @@ async def get_download_url(
             async with session.get(
                 f"{ARC_API_BASE}/youtube/v2/download",
                 params=params,
-                timeout=20
+                timeout=30
             ) as r:
                 if r.status != 200:
-                    error_msg = await r.text()
-                    raise HTTPException(r.status, f"Arc API Error: {error_msg}")
+                    raise HTTPException(r.status, f"Arc Init Error: {await r.text()}")
                 
                 data = await r.json()
                 job_id = data.get("job_id")
@@ -54,11 +52,10 @@ async def get_download_url(
                     raise HTTPException(500, "Arc API failed to return a job_id")
         except asyncio.TimeoutError:
             raise HTTPException(504, "Arc API initialization request timed out")
-
-    # Step 2: Poll status endpoint for completion
+    
+    # Step 2: Poll Job Status until done
     async with aiohttp.ClientSession() as session:
-        # Loop 45 times with 2-second sleep intervals (90 seconds maximum wait time)
-        for _ in range(45):
+        for _ in range(45):  # Poll up to 90 seconds
             await asyncio.sleep(2)
             
             try:
@@ -72,34 +69,40 @@ async def get_download_url(
                         continue
                     
                     status_data = await r.json()
-                    
-                    # Read status structure matching Arc documentation
                     job = status_data.get("job", {})
                     status = job.get("status") or status_data.get("status")
                     
                     if status == "done":
                         public_url = job.get("result", {}).get("public_url", "")
-                        if not public_url:
-                            raise HTTPException(500, "Job completed but no download path was provided")
-                        
-                        # Match extensions cleanly
-                        if not isVideo and ".m4a" in public_url:
-                            public_url = public_url.replace(".m4a", ".mp3")
+                        if public_url:
+                            if ".m4a" in public_url:
+                                public_url = public_url.replace(".m4a", ".mp3")
                             
-                        return {
-                            "success": True,
-                            "video_id": video_id,
-                            "job_id": job_id,
-                            "download_url": f"{ARC_API_BASE}{public_url}"
-                        }
+                            return {
+                                "success": True,
+                                "video_id": video_id,
+                                "download_url": f"{ARC_API_BASE}{public_url}"
+                            }
                     
                     elif status in ("failed", "error"):
-                        raise HTTPException(500, "Arc API media download processing failed")
-                        
+                        raise HTTPException(500, "Download task failed on processing backend")
             except asyncio.TimeoutError:
-                continue # Skip flaky timeouts and keep polling until the 90s mark
+                continue
                 
-    raise HTTPException(408, "The download task timed out on the processing backend")
+    raise HTTPException(408, "Download task timed out")
+
+# ==================== MAINTENANCE ENDPOINTS ====================
+
+@app.get("/media/{file_path:path}")
+async def get_media(file_path: str):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{ARC_API_BASE}/media/{file_path}") as r:
+            if r.status != 200:
+                raise HTTPException(r.status, "Media not found")
+            return StreamingResponse(
+                r.content,
+                media_type=r.headers.get("content-type", "audio/mpeg")
+            )
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
